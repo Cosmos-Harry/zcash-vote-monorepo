@@ -182,8 +182,18 @@ pub fn compute_nf_proof(
 // Database-backed helpers
 // ---------------------------------------------------------------------------
 
-/// Load nullifiers from DB, inject sentinels, build ranges.
-pub fn list_nf_ranges(connection: &Connection) -> Result<(Vec<NfRange>, Vec<Fp>)> {
+/// Convert `[low, width]` ranges to the flat `[low, high, low, high, ...]`
+/// format expected by `orchard::vote::vote()`.
+pub fn flatten_ranges(ranges: &[NfRange]) -> Vec<Fp> {
+    ranges
+        .iter()
+        .flat_map(|[low, width]| [*low, *low + *width])
+        .collect()
+}
+
+/// Load nullifiers from DB, inject sentinels, and return flat NF ranges
+/// in the `[low, high, low, high, ...]` format expected by `orchard::vote::vote()`.
+pub fn list_nf_ranges(connection: &Connection) -> Result<Vec<Fp>> {
     let mut s = connection.prepare("SELECT hash FROM nfs")?;
     let rows = s.query_map([], |r| {
         let v = r.get::<_, [u8; 32]>(0)?;
@@ -193,7 +203,7 @@ pub fn list_nf_ranges(connection: &Connection) -> Result<(Vec<NfRange>, Vec<Fp>)
     let extra = rows.collect::<std::result::Result<Vec<_>, _>>()?;
     let nfs = prepare_nullifiers(extra);
     let ranges = build_nf_ranges(nfs);
-    Ok((ranges, vec![]))
+    Ok(flatten_ranges(&ranges))
 }
 
 /// Compute the NF tree root from the DB.
