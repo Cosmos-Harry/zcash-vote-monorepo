@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use tauri::State;
 use zcash_vote::{
     db::{load_prop, store_prop},
-    trees::{list_cmxs, list_nf_ranges},
+    trees::list_cmxs,
 };
 
 use crate::state::AppState;
@@ -23,13 +23,10 @@ pub fn compute_roots(state: State<Mutex<AppState>>) -> Result<(), String> {
     })
 }
 
-// TODO: Pass positions of spent notes and return their MP
 pub fn compute_nf_root(connection: &Connection) -> Result<Vec<u8>> {
-    let nf_tree = list_nf_ranges(connection)?;
-    let (nf_root, _) = calculate_merkle_paths(0, &[], &nf_tree);
-    store_prop(connection, "nf_root", &hex::encode(&nf_root.to_repr()))?;
-
-    Ok(nf_root.to_repr().to_vec())
+    let nf_root = zcash_vote::trees::compute_nf_root(connection)?;
+    store_prop(connection, "nf_root", &hex::encode(&nf_root.0))?;
+    Ok(nf_root.0.to_vec())
 }
 
 // TODO: Retrieve frontier

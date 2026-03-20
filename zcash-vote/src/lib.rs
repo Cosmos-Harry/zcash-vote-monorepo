@@ -28,8 +28,6 @@ pub struct VoteNote {
     pub note: Note,
     pub idx: usize,
     pub nf: Nullifier,
-    pub nf_start: Nullifier,
-    pub nf_path: MerklePath,
     pub cmx_path: MerklePath,
 }
 

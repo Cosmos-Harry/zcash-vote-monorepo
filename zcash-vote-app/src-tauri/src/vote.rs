@@ -4,12 +4,13 @@ use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::State;
+use pasta_curves::{group::ff::PrimeField as _, Fp};
 use zcash_vote::{
     address::VoteAddress,
     db::{list_notes, load_prop},
     decrypt::{to_fvk, to_sk},
     election::{BALLOT_PK, BALLOT_VK},
-    trees::{list_cmxs, list_nf_ranges},
+    trees::{list_cmxs, compute_nf_tree, prepare_nullifiers, compute_nf_proof},
 };
 
 #[tauri::command]
@@ -55,7 +56,37 @@ pub async fn vote(
         let connection = pool.get()?;
         let notes = list_notes(&connection, 0, &fvk, scope)?;
         let cmxs = list_cmxs(&connection)?;
-        let nfs = list_nf_ranges(&connection)?;
+
+        // Build NF tree locally and compute proofs for each note's nullifier.
+        // TODO: Replace with PIR client query for privacy.
+        let extra = {
+            let mut s = connection.prepare("SELECT hash FROM nfs")?;
+            let rows = s.query_map([], |r| {
+                let v = r.get::<_, [u8; 32]>(0)?;
+                let v = Fp::from_repr(v).unwrap();
+                Ok(v)
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let sorted_nfs = prepare_nullifiers(extra);
+        let (nf_root, ranges, levels) = compute_nf_tree(sorted_nfs);
+
+        // Compute NF non-membership proofs for each input note
+        let mut nf_proofs = vec![];
+        for (note, _pos) in notes.iter() {
+            let nf = note.nullifier(&fvk);
+            let nf_fp = Fp::from_repr(nf.to_bytes()).unwrap();
+            let proof = compute_nf_proof(nf_fp, nf_root, &ranges, &levels)
+                .ok_or_else(|| anyhow::anyhow!("Nullifier is in the set — cannot vote"))?;
+            nf_proofs.push(orchard::vote::NfProofData {
+                root: proof.root,
+                low: proof.low,
+                width: proof.width,
+                leaf_pos: proof.leaf_pos,
+                path: proof.path,
+            });
+        }
+
         let ballot = orchard::vote::vote(
             domain,
             signature_required,
@@ -64,7 +95,7 @@ pub async fn vote(
             vaddress.0,
             amount,
             &notes,
-            &nfs,
+            &nf_proofs,
             &cmxs,
             &mut rng,
             &BALLOT_PK,
